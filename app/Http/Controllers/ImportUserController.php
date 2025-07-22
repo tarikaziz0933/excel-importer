@@ -4,12 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Exports\ArrayExport;
 use App\Models\ImportUser;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Maatwebsite\Excel\Facades\Excel;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class ImportUserController extends Controller
 {
@@ -20,9 +20,20 @@ class ImportUserController extends Controller
         ]);
 
         $file = $request->file('file');
-        $spreadsheet = IOFactory::load($file->getPathname());
+
+        try {
+            $spreadsheet = IOFactory::load($file->getPathname());
+        } catch (\Exception $e) {
+            Log::error('Excel load failed: ' . $e->getMessage());
+            return response()->json(['error' => 'Invalid Excel file.'], 500);
+        }
+
         $sheet = $spreadsheet->getActiveSheet();
         $rows = $sheet->toArray();
+
+        if (count($rows) < 2) {
+            return response()->json(['error' => 'Excel file is empty or missing headers.'], 400);
+        }
 
         $headers = array_map('strtolower', $rows[0]);
         unset($rows[0]);
@@ -32,9 +43,10 @@ class ImportUserController extends Controller
 
         foreach ($rows as $index => $row) {
             $rowData = array_combine($headers, $row);
+
             $validator = Validator::make($rowData, [
                 'name' => 'required|string',
-                'email' => 'required|email|unique:users,email',
+                'email' => 'required|email',
                 'phone' => 'nullable|string',
                 'gender' => 'nullable|string',
             ]);
@@ -50,7 +62,14 @@ class ImportUserController extends Controller
         }
 
         foreach ($validRows as $user) {
-            ImportUser::create($user);
+            ImportUser::updateOrCreate(
+                ['email' => $user['email']], // condition
+                [ // data to insert/update
+                    'name' => $user['name'],
+                    'phone' => $user['phone'] ?? null,
+                    'gender' => $user['gender'] ?? null,
+                ]
+            );
         }
 
         if (!empty($invalidRows)) {
